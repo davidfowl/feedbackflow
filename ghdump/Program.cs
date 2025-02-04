@@ -14,9 +14,9 @@ var builder = new ConfigurationBuilder()
 var configuration = builder.Build();
 
 // The access token can be specified in the command line argument -t/--token or by using the environment variable GITHUB_TOKEN
-var configAccessToken = configuration["Github:Token"] ?? configuration["GITHUB_TOKEN"] ?? "";
+var configAccessToken = configuration["GitHub:Token"] ?? configuration["GITHUB_TOKEN"] ?? "";
 
-var accessToken = new Option<string?>(["-t", "--token"], () => null, "The Github access token. Can be specified in an environment variable GITHUB_TOKEN.");
+var accessToken = new Option<string?>(["-t", "--token"], () => null, "The GitHub access token. Can be specified in an environment variable GITHUB_TOKEN.");
 
 accessToken.AddValidator(r =>
 {
@@ -24,7 +24,7 @@ accessToken.AddValidator(r =>
 
     if (string.IsNullOrWhiteSpace(value))
     {
-        r.ErrorMessage = "A Github access token is required. Please specify it via the command line argument -t/--token or by using the environment variable GITHUB_TOKEN";
+        r.ErrorMessage = "A GitHub access token is required. Please specify it via the command line argument -t/--token or by using the environment variable GITHUB_TOKEN";
     }
 });
 
@@ -49,28 +49,32 @@ var labelOption = new Option<string[]>(["-l", "-labels"], "Labels to filter issu
     AllowMultipleArgumentsPerToken = true
 };
 
-var includeDiscussionsOption = new Option<bool?>(["-d", "--include-discussions"], () => null, "Include github discussions.");
+var includePullsOption = new Option<bool?>(["-p", "--include-pull-requests"], () => null, "Include GitHub pull-requests.");
+var includeDiscussionsOption = new Option<bool?>(["-d", "--include-discussions"], () => null, "Include GitHub discussions.");
 
 var outputPath = new Option<string?>(["-o", "--output"], () => null, "The directory where the results will be written. Defaults to the current working directory");
 
-var rootCommand = new RootCommand("CLI tool for extracting Github issues and discussions in a JSON format.")
+var rootCommand = new RootCommand("CLI tool for extracting GitHub issues and discussions in a JSON format.")
 {
     accessToken,
     repoOption,
     labelOption,
+    includePullsOption,
     includeDiscussionsOption,
     outputPath
 };
 
-rootCommand.SetHandler(RunAsync, accessToken, repoOption, labelOption, includeDiscussionsOption, outputPath);
+rootCommand.SetHandler(RunAsync, accessToken, repoOption, labelOption, includePullsOption, includeDiscussionsOption, outputPath);
 
 await rootCommand.InvokeAsync(args);
 
-async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? includeDiscussions, string? outputDirectory)
+async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? includePullRequests, bool? includeDiscussions, string? outputDirectory)
 {
     accessToken ??= configAccessToken;
     includeDiscussions ??= labels is [];
     outputDirectory ??= Environment.CurrentDirectory;
+
+    bool includePulls = includePullRequests ?? false;
 
     var (repoOwner, repoName) = repo?.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries) switch
     {
@@ -98,6 +102,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
         Console.WriteLine("No Labels specified.");
     }
 
+    Console.WriteLine($"Including pull-requests: {(includePulls ? "yes" : "no")}");
     Console.WriteLine($"Including discussions: {(includeDiscussions.Value ? "yes" : "no")}");
     Console.WriteLine($"Results directory: {outputDirectory}");
 
@@ -110,15 +115,17 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
 
     var discussionsTask = GetDiscussionsAsync(includeDiscussions.Value);
     var issuesTask = GetIssuesAsync(labels);
+    var pullsTask = GetPullRequestsAsync(labels, includePulls);
 
-    await Task.WhenAll(discussionsTask, issuesTask);
+    await Task.WhenAll(discussionsTask, issuesTask, pullsTask);
 
     sw.Stop();
 
     var issues = await issuesTask;
+    var pulls = await pullsTask;
     var discussions = await discussionsTask;
 
-    await WriteResultsToDisk(outputDirectory, issues, includeDiscussions.Value, discussions, sw.Elapsed);
+    await WriteResultsToDisk(outputDirectory, issues, includePulls, pulls, includeDiscussions.Value, discussions, sw.Elapsed);
 
     async Task<bool> CheckRepositoryValid(string repoOwner, string repoName)
     {
@@ -151,6 +158,8 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
     async Task WriteResultsToDisk(
         string outputDirectory,
         List<GithubIssueModel> issues,
+        bool includePullRequests,
+        List<GithubIssueModel> pullRequests,
         bool includeDiscussions,
         List<GithubDiscussionModel> discussions,
         TimeSpan elapsed)
@@ -170,13 +179,32 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
 
             Console.WriteLine($"Processed {issues.Count} issues.");
             Console.WriteLine($"Issues have been written to {fileName}.");
-            Console.WriteLine();
         }
         else
         {
             Console.WriteLine("No issues found.");
-            Console.WriteLine();
         }
+
+        Console.WriteLine();
+
+        if (pullRequests.Count > 0)
+        {
+            var fileName = $"pullrequests_{repoOwner}_{repoName}_output.json";
+
+            var outputPath = Path.Combine(outputDirectory, fileName);
+
+            await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+            await JsonSerializer.SerializeAsync(fileStream, pullRequests, ModelsJsonContext.Default.ListGithubIssueModel);
+
+            Console.WriteLine($"Processed {pullRequests.Count} pull-requests.");
+            Console.WriteLine($"Pull-requests have been written to {fileName}.");
+        }
+        else if (includePullRequests)
+        {
+            Console.WriteLine("No pull-requests found.");
+        }
+
+        Console.WriteLine();
 
         if (discussions.Count > 0)
         {
@@ -465,5 +493,138 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
         } while (graphqlResult.Data.Repository.Discussions.PageInfo.HasNextPage);
 
         return allDiscussions;
+    }
+
+
+    async Task<List<GithubIssueModel>> GetPullRequestsAsync(string[] labels, bool includePulls)
+    {
+        if (!includePulls)
+        {
+            return [];
+        }
+
+        string? issuesCursor = null;
+        GraphqlResponse? graphqlResult = null;
+
+        var allIssues = new List<GithubIssueModel>();
+
+        do
+        {
+            var issuesQuery = @"
+                    query($owner: String!, $name: String!, $after: String, $labels: [String!]) {
+                        repository(owner: $owner, name: $name) {
+                            pullRequests(first: 100, after: $after, states: OPEN, labels: $labels) {
+                                edges {
+                                    node {
+                                        id
+                                        title
+                                        body
+                                        url
+                                        createdAt
+                                        updatedAt
+                                        reactions(content: THUMBS_UP) {
+                                            totalCount
+                                        }
+                                        labels(first: 100) {
+                                            nodes {
+                                                name
+                                            }
+                                        }
+                                        comments(first: 100) {
+                                            edges {
+                                                node {
+                                                    id
+                                                    body
+                                                    createdAt
+                                                    url
+                                                    author {
+                                                        login
+                                                    }
+                                                }
+                                            }
+                                            pageInfo {
+                                                hasNextPage
+                                                endCursor
+                                            }
+                                        }
+                                    }
+                                }
+                                pageInfo {
+                                    hasNextPage
+                                    endCursor
+                                }
+                            }
+                        }
+                    }";
+
+            var queryPayload = new GithubIssueQuery
+            {
+                Query = issuesQuery,
+                Variables = new() { Owner = repoOwner, Name = repoName, After = issuesCursor, Labels = labels is [] ? null : labels }
+            };
+
+            var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubIssueQuery);
+
+            if (!graphqlResponse.IsSuccessStatusCode)
+            {
+                if (graphqlResponse.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    retryCount++;
+                    if (retryCount > maxRetries)
+                    {
+                        Console.WriteLine("Max retry attempts reached. Exiting.");
+                        break;
+                    }
+
+                    var retryAfterHeader = graphqlResponse.Headers.RetryAfter;
+                    var retryAfterSeconds = retryAfterHeader?.Delta?.TotalSeconds ?? 60;
+
+                    Console.WriteLine($"Rate limited. Retrying in {retryAfterSeconds} seconds...");
+                    await Task.Delay(TimeSpan.FromSeconds(retryAfterSeconds));
+
+                    continue;
+                }
+
+                var errorContent = await graphqlResponse.Content.ReadAsStringAsync();
+                Console.WriteLine($"Error: {graphqlResponse.StatusCode}, Details: {errorContent}");
+                break;
+            }
+
+            graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
+
+            foreach (var issueEdge in graphqlResult.Data.Repository!.PullRequests.Edges)
+            {
+                var issue = issueEdge.Node;
+
+                Console.WriteLine($"Processing issue {issue.Title} ({issue.Url})");
+
+                var issueJson = new GithubIssueModel
+                {
+                    Id = issue.Id,
+                    Title = issue.Title,
+                    URL = issue.Url,
+                    CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
+                    LastUpdated = DateTime.Parse(issue.UpdatedAt).ToUniversalTime(),
+                    Body = issue.Body,
+                    Upvotes = issue.Reactions?.TotalCount ?? 0,
+                    Labels = issue.Labels.Nodes.Select(label => label.Name),
+                    Comments = [.. issue.Comments.Edges.Select(commentEdge => new GithubCommentModel
+                    {
+                        Id = commentEdge.Node.Id,
+                        Author = commentEdge.Node.Author?.Login ?? "??",
+                        CreatedAt = commentEdge.Node.CreatedAt,
+                        Content = commentEdge.Node.Body,
+                        Url = commentEdge.Node.Url
+                    })]
+                };
+
+                allIssues.Add(issueJson);
+            }
+
+            issuesCursor = graphqlResult.Data.Repository.PullRequests.PageInfo.EndCursor;
+
+        } while (graphqlResult!.Data.Repository!.PullRequests.PageInfo.HasNextPage);
+
+        return allIssues;
     }
 }

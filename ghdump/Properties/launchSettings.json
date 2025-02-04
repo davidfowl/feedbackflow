@@ -2,7 +2,7 @@
   "profiles": {
     "ghdump": {
       "commandName": "Project",
-      "commandLineArgs": "-r dotnet/aspire"
+      "commandLineArgs": "-r dotnet/extensions -p"
     }
   }
 }

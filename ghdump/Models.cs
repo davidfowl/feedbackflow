@@ -16,6 +16,7 @@ public class Repository
 {
     public DiscussionConnection Discussions { get; set; } = default!;
     public IssueConnection Issues { get; set; } = default!;
+    public PullRequestConnection PullRequests { get; set; } = default!;
 }
 
 public class DiscussionConnection
@@ -77,6 +78,25 @@ public class IssueConnection
 }
 
 public class Issue
+{
+    public required string Id { get; set; }
+    public required string Title { get; set; }
+    public required string Body { get; set; }
+    public required string Url { get; set; }
+    public required string CreatedAt { get; set; }
+    public required string UpdatedAt { get; set; }
+    public required Reaction Reactions { get; set; }
+    public required LabelConnection Labels { get; set; }
+    public required CommentConnection Comments { get; set; }
+}
+
+public class PullRequestConnection
+{
+    public required List<Edge<PullRequest>> Edges { get; set; }
+    public required PageInfo PageInfo { get; set; }
+}
+
+public class PullRequest
 {
     public required string Id { get; set; }
     public required string Title { get; set; }
@@ -200,10 +220,11 @@ public class GithubDiscussionQuery
 [JsonSerializable(typeof(PageInfo))]
 [JsonSerializable(typeof(IssueConnection))]
 [JsonSerializable(typeof(Issue))]
+[JsonSerializable(typeof(PullRequestConnection))]
+[JsonSerializable(typeof(PullRequest))]
 [JsonSerializable(typeof(Reaction))]
 [JsonSerializable(typeof(LabelConnection))]
 [JsonSerializable(typeof(Label))]
 public partial class ModelsJsonContext : JsonSerializerContext
 {
 }
-
