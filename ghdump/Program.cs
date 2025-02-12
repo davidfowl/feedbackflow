@@ -257,6 +257,9 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                                 edges {
                                     node {
                                         id
+                                        author {
+                                            login
+                                        }
                                         title
                                         body
                                         url
@@ -341,6 +344,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                 var issueJson = new GithubIssueModel
                 {
                     Id = issue.Id,
+                    Author = issue.Author?.Login ?? "??",
                     Title = issue.Title,
                     URL = issue.Url,
                     CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
@@ -533,6 +537,9 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                                 edges {
                                     node {
                                         id
+                                        author {
+                                            login
+                                        }
                                         title
                                         body
                                         url
@@ -617,6 +624,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                 var issueJson = new GithubIssueModel
                 {
                     Id = issue.Id,
+                    Author = issue.Author?.Login ?? "??",
                     Title = issue.Title,
                     URL = issue.Url,
                     CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),

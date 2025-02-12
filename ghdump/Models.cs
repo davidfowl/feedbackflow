@@ -80,6 +80,7 @@ public class IssueConnection
 public class Issue
 {
     public required string Id { get; set; }
+    public required Author Author { get; set; }
     public required string Title { get; set; }
     public required string Body { get; set; }
     public required string Url { get; set; }
@@ -99,6 +100,7 @@ public class PullRequestConnection
 public class PullRequest
 {
     public required string Id { get; set; }
+    public required Author Author { get; set; }
     public required string Title { get; set; }
     public required string Body { get; set; }
     public required string Url { get; set; }
@@ -136,6 +138,7 @@ public class GithubDiscussionModel
 public class GithubIssueModel
 {
     public required string Id { get; set; }
+    public required string Author { get; set; }
     public required string Title { get; set; }
     public required string URL { get; set; }
     public required DateTime CreatedAt { get; set; }
