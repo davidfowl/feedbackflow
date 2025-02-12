@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UserSecretsId>7daf1c07-0951-4b52-a198-e4a9c20265e7</UserSecretsId>
-	<AssemblyName>ghdump</AssemblyName>
-	<PublishAot>true</PublishAot>
+    <AssemblyName>ghdump</AssemblyName>
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
 
   <ItemGroup>

@@ -49,6 +49,7 @@ var labelOption = new Option<string[]>(["-l", "-labels"], "Labels to filter issu
     AllowMultipleArgumentsPerToken = true
 };
 
+var includeIssuesOption = new Option<bool?>(["-i", "--include-issues"], () => null, "Include GitHub issues.");
 var includePullsOption = new Option<bool?>(["-p", "--include-pull-requests"], () => null, "Include GitHub pull-requests.");
 var includeDiscussionsOption = new Option<bool?>(["-d", "--include-discussions"], () => null, "Include GitHub discussions.");
 
@@ -59,26 +60,34 @@ var rootCommand = new RootCommand("CLI tool for extracting GitHub issues and dis
     accessToken,
     repoOption,
     labelOption,
+    includeIssuesOption,
     includePullsOption,
     includeDiscussionsOption,
     outputPath
 };
 
-rootCommand.SetHandler(RunAsync, accessToken, repoOption, labelOption, includePullsOption, includeDiscussionsOption, outputPath);
+rootCommand.SetHandler(RunAsync, accessToken, repoOption, labelOption, includeIssuesOption, includePullsOption, includeDiscussionsOption, outputPath);
 
 await rootCommand.InvokeAsync(args);
 
-async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? includePullRequests, bool? includeDiscussions, string? outputDirectory)
+async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? includeIssues, bool? includePullRequests, bool? includeDiscussions, string? outputDirectory)
 {
     accessToken ??= configAccessToken;
-    includeDiscussions ??= labels is [];
     outputDirectory ??= Environment.CurrentDirectory;
 
-    bool includePulls = includePullRequests ?? false;
+    bool issuesIncluded = includeIssues ?? false;
+    bool pullsIncluded = includePullRequests ?? false;
+    bool discussionsIncluded = includeDiscussions ?? false;
+
+    if (!issuesIncluded && !pullsIncluded && !discussionsIncluded)
+    {
+        // If no options are specified, include issues by default
+        issuesIncluded = true;
+    }
 
     var (repoOwner, repoName) = repo?.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries) switch
     {
-    [var owner, var name] => (owner, name),
+        [var owner, var name] => (owner, name),
         _ => throw new InvalidOperationException("Invalid repository format, expected owner/repo. Example: dotnet/aspnetcore.")
     };
 
@@ -102,8 +111,9 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
         Console.WriteLine("No Labels specified.");
     }
 
-    Console.WriteLine($"Including pull-requests: {(includePulls ? "yes" : "no")}");
-    Console.WriteLine($"Including discussions: {(includeDiscussions.Value ? "yes" : "no")}");
+    Console.WriteLine($"Including issues: {(issuesIncluded ? "yes" : "no")}");
+    Console.WriteLine($"Including pull-requests: {(pullsIncluded ? "yes" : "no")}");
+    Console.WriteLine($"Including discussions: {(discussionsIncluded ? "yes" : "no")}");
     Console.WriteLine($"Results directory: {outputDirectory}");
 
     if (!await CheckRepositoryValid(repoOwner, repoName))
@@ -113,9 +123,9 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
 
     var sw = Stopwatch.StartNew();
 
-    var discussionsTask = GetDiscussionsAsync(includeDiscussions.Value);
-    var issuesTask = GetIssuesAsync(labels);
-    var pullsTask = GetPullRequestsAsync(labels, includePulls);
+    var discussionsTask = GetDiscussionsAsync(discussionsIncluded);
+    var issuesTask = GetIssuesAsync(labels, issuesIncluded);
+    var pullsTask = GetPullRequestsAsync(labels, pullsIncluded);
 
     await Task.WhenAll(discussionsTask, issuesTask, pullsTask);
 
@@ -125,7 +135,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
     var pulls = await pullsTask;
     var discussions = await discussionsTask;
 
-    await WriteResultsToDisk(outputDirectory, issues, includePulls, pulls, includeDiscussions.Value, discussions, sw.Elapsed);
+    await WriteResultsToDisk(outputDirectory, issuesIncluded, issues, pullsIncluded, pulls, discussionsIncluded, discussions, sw.Elapsed);
 
     async Task<bool> CheckRepositoryValid(string repoOwner, string repoName)
     {
@@ -157,6 +167,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
 
     async Task WriteResultsToDisk(
         string outputDirectory,
+        bool includeIssues,
         List<GithubIssueModel> issues,
         bool includePullRequests,
         List<GithubIssueModel> pullRequests,
@@ -180,7 +191,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
             Console.WriteLine($"Processed {issues.Count} issues.");
             Console.WriteLine($"Issues have been written to {fileName}.");
         }
-        else
+        else if (includeIssues)
         {
             Console.WriteLine("No issues found.");
         }
@@ -225,8 +236,13 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
     }
 
 
-    async Task<List<GithubIssueModel>> GetIssuesAsync(string[] labels)
+    async Task<List<GithubIssueModel>> GetIssuesAsync(string[] labels, bool includeIssues)
     {
+        if (!includeIssues)
+        {
+            return [];
+        }
+
         string? issuesCursor = null;
         GraphqlResponse? graphqlResult = null;
 
@@ -596,7 +612,7 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
             {
                 var issue = issueEdge.Node;
 
-                Console.WriteLine($"Processing issue {issue.Title} ({issue.Url})");
+                Console.WriteLine($"Processing pull-request {issue.Title} ({issue.Url})");
 
                 var issueJson = new GithubIssueModel
                 {
