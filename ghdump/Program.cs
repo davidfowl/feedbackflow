@@ -68,189 +68,194 @@ var rootCommand = new RootCommand("CLI tool for extracting GitHub issues and dis
 
 rootCommand.SetHandler(RunAsync, accessToken, repoOption, labelOption, includeIssuesOption, includePullsOption, includeDiscussionsOption, outputPath);
 
-await rootCommand.InvokeAsync(args);
+return await rootCommand.InvokeAsync(args);
 
-async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? includeIssues, bool? includePullRequests, bool? includeDiscussions, string? outputDirectory)
+async Task<int> RunAsync(string? accessToken, string? repo, string[] labels, bool? includeIssues, bool? includePullRequests, bool? includeDiscussions, string? outputDirectory)
 {
-    accessToken ??= configAccessToken;
-    outputDirectory ??= Environment.CurrentDirectory;
-
-    bool issuesIncluded = includeIssues ?? false;
-    bool pullsIncluded = includePullRequests ?? false;
-    bool discussionsIncluded = includeDiscussions ?? false;
-
-    if (!issuesIncluded && !pullsIncluded && !discussionsIncluded)
+    try
     {
-        // If no options are specified, include issues by default
-        issuesIncluded = true;
-    }
+        accessToken ??= configAccessToken;
+        outputDirectory ??= Environment.CurrentDirectory;
 
-    var (repoOwner, repoName) = repo?.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries) switch
-    {
-        [var owner, var name] => (owner, name),
-        _ => throw new InvalidOperationException("Invalid repository format, expected owner/repo. Example: dotnet/aspnetcore.")
-    };
+        bool issuesIncluded = includeIssues ?? false;
+        bool pullsIncluded = includePullRequests ?? false;
+        bool discussionsIncluded = includeDiscussions ?? false;
 
-    var maxRetries = 5;
-    var retryCount = 0;
+        if (!issuesIncluded && !pullsIncluded && !discussionsIncluded)
+        {
+            // If no options are specified, include issues by default
+            issuesIncluded = true;
+        }
 
-    using var httpClient = new HttpClient();
-    httpClient.DefaultRequestHeaders.Authorization = new("Bearer", accessToken);
-    var an = typeof(Program).Assembly.GetName();
-    httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(an.Name!, $"{an.Version}"));
+        var (repoOwner, repoName) = repo?.Trim().Split('/', StringSplitOptions.RemoveEmptyEntries) switch
+        {
+            [var owner, var name] => (owner, name),
+            _ => throw new InvalidOperationException("Invalid repository format, expected owner/repo. Example: dotnet/aspnetcore.")
+        };
 
-    // Print out the repository information
-    Console.WriteLine($"Repository: {repoOwner}/{repoName}");
+        var maxRetries = 5;
+        var retryCount = 0;
 
-    if (labels.Length > 0)
-    {
-        Console.WriteLine($"Labels: {string.Join(", ", labels)}");
-    }
-    else
-    {
-        Console.WriteLine("No Labels specified.");
-    }
+        using var httpClient = new HttpClient();
+        httpClient.DefaultRequestHeaders.Authorization = new("Bearer", accessToken);
+        var an = typeof(Program).Assembly.GetName();
+        httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(an.Name!, $"{an.Version}"));
 
-    Console.WriteLine($"Including issues: {(issuesIncluded ? "yes" : "no")}");
-    Console.WriteLine($"Including pull-requests: {(pullsIncluded ? "yes" : "no")}");
-    Console.WriteLine($"Including discussions: {(discussionsIncluded ? "yes" : "no")}");
-    Console.WriteLine($"Results directory: {outputDirectory}");
+        // Print out the repository information
+        Console.WriteLine($"Repository: {repoOwner}/{repoName}");
 
-    if (!await CheckRepositoryValid(repoOwner, repoName))
-    {
-        return;
-    }
+        if (labels.Length > 0)
+        {
+            Console.WriteLine($"Labels: {string.Join(", ", labels)}");
+        }
+        else
+        {
+            Console.WriteLine("No Labels specified.");
+        }
 
-    var sw = Stopwatch.StartNew();
+        Console.WriteLine($"Including issues: {(issuesIncluded ? "yes" : "no")}");
+        Console.WriteLine($"Including pull-requests: {(pullsIncluded ? "yes" : "no")}");
+        Console.WriteLine($"Including discussions: {(discussionsIncluded ? "yes" : "no")}");
+        Console.WriteLine($"Results directory: {outputDirectory}");
 
-    var discussionsTask = GetDiscussionsAsync(discussionsIncluded);
-    var issuesTask = GetIssuesAsync(labels, issuesIncluded);
-    var pullsTask = GetPullRequestsAsync(labels, pullsIncluded);
+        if (!await CheckRepositoryValid(repoOwner, repoName))
+        {
+            Console.Error.WriteLine("Invalid repository");
+            return 1;
+        }
 
-    await Task.WhenAll(discussionsTask, issuesTask, pullsTask);
+        var sw = Stopwatch.StartNew();
 
-    sw.Stop();
+        var discussionsTask = GetDiscussionsAsync(discussionsIncluded);
+        var issuesTask = GetIssuesAsync(labels, issuesIncluded);
+        var pullsTask = GetPullRequestsAsync(labels, pullsIncluded);
 
-    var issues = await issuesTask;
-    var pulls = await pullsTask;
-    var discussions = await discussionsTask;
+        await Task.WhenAll(discussionsTask, issuesTask, pullsTask);
 
-    await WriteResultsToDisk(outputDirectory, issuesIncluded, issues, pullsIncluded, pulls, discussionsIncluded, discussions, sw.Elapsed);
+        sw.Stop();
 
-    async Task<bool> CheckRepositoryValid(string repoOwner, string repoName)
-    {
-        // Check if this repository is valid
-        var checkRepoQuery = @"
+        var issues = await issuesTask;
+        var pulls = await pullsTask;
+        var discussions = await discussionsTask;
+
+        await WriteResultsToDisk(outputDirectory, issuesIncluded, issues, pullsIncluded, pulls, discussionsIncluded, discussions, sw.Elapsed);
+
+        return 0;
+
+        async Task<bool> CheckRepositoryValid(string repoOwner, string repoName)
+        {
+            // Check if this repository is valid
+            var checkRepoQuery = @"
             query($owner: String!, $name: String!) {
                 repository(owner: $owner, name: $name) {
                     id
                 }
             }";
 
-        var response = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", new GithubRepositoryQuery
-        {
-            Query = checkRepoQuery,
-            Variables = new() { Owner = repoOwner, Name = repoName }
-        },
-        ModelsJsonContext.Default.GithubRepositoryQuery);
+            var response = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", new GithubRepositoryQuery
+            {
+                Query = checkRepoQuery,
+                Variables = new() { Owner = repoOwner, Name = repoName }
+            },
+            ModelsJsonContext.Default.GithubRepositoryQuery);
 
-        if (!response.IsSuccessStatusCode)
-        {
-            Console.WriteLine(await response.Content.ReadAsStringAsync());
-            return false;
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(await response.Content.ReadAsStringAsync());
+                return false;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse);
+
+            return result?.Data.Repository is not null;
         }
 
-        var result = await response.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse);
-
-        return result?.Data.Repository is not null;
-    }
-
-    async Task WriteResultsToDisk(
-        string outputDirectory,
-        bool includeIssues,
-        List<GithubIssueModel> issues,
-        bool includePullRequests,
-        List<GithubIssueModel> pullRequests,
-        bool includeDiscussions,
-        List<GithubDiscussionModel> discussions,
-        TimeSpan elapsed)
-    {
-        Console.WriteLine();
-        Console.WriteLine($"Processing completed in {elapsed}.");
-
-        if (issues.Count > 0)
+        async Task WriteResultsToDisk(
+            string outputDirectory,
+            bool includeIssues,
+            List<GithubIssueModel> issues,
+            bool includePullRequests,
+            List<GithubIssueModel> pullRequests,
+            bool includeDiscussions,
+            List<GithubDiscussionModel> discussions,
+            TimeSpan elapsed)
         {
-            var labelsPart = labels.Length > 0 ? string.Join("_", labels) : "all";
-            var fileName = $"issues_{repoOwner}_{repoName}_{labelsPart}_output.json";
+            Console.WriteLine();
+            Console.WriteLine($"Processing completed in {elapsed}.");
 
-            var outputPath = Path.Combine(outputDirectory, fileName);
-            await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+            if (issues.Count > 0)
+            {
+                var labelsPart = labels.Length > 0 ? string.Join("_", labels) : "all";
+                var fileName = $"issues_{repoOwner}_{repoName}_{labelsPart}_output.json";
 
-            await JsonSerializer.SerializeAsync(fileStream, issues, ModelsJsonContext.Default.ListGithubIssueModel);
+                var outputPath = Path.Combine(outputDirectory, fileName);
+                await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
 
-            Console.WriteLine($"Processed {issues.Count} issues.");
-            Console.WriteLine($"Issues have been written to {fileName}.");
-        }
-        else if (includeIssues)
-        {
-            Console.WriteLine("No issues found.");
-        }
+                await JsonSerializer.SerializeAsync(fileStream, issues, ModelsJsonContext.Default.ListGithubIssueModel);
 
-        Console.WriteLine();
+                Console.WriteLine($"Processed {issues.Count} issues.");
+                Console.WriteLine($"Issues have been written to {fileName}.");
+            }
+            else if (includeIssues)
+            {
+                Console.WriteLine("No issues found.");
+            }
 
-        if (pullRequests.Count > 0)
-        {
-            var fileName = $"pullrequests_{repoOwner}_{repoName}_output.json";
+            Console.WriteLine();
 
-            var outputPath = Path.Combine(outputDirectory, fileName);
+            if (pullRequests.Count > 0)
+            {
+                var fileName = $"pullrequests_{repoOwner}_{repoName}_output.json";
 
-            await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
-            await JsonSerializer.SerializeAsync(fileStream, pullRequests, ModelsJsonContext.Default.ListGithubIssueModel);
+                var outputPath = Path.Combine(outputDirectory, fileName);
 
-            Console.WriteLine($"Processed {pullRequests.Count} pull-requests.");
-            Console.WriteLine($"Pull-requests have been written to {fileName}.");
-        }
-        else if (includePullRequests)
-        {
-            Console.WriteLine("No pull-requests found.");
-        }
+                await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+                await JsonSerializer.SerializeAsync(fileStream, pullRequests, ModelsJsonContext.Default.ListGithubIssueModel);
 
-        Console.WriteLine();
+                Console.WriteLine($"Processed {pullRequests.Count} pull-requests.");
+                Console.WriteLine($"Pull-requests have been written to {fileName}.");
+            }
+            else if (includePullRequests)
+            {
+                Console.WriteLine("No pull-requests found.");
+            }
 
-        if (discussions.Count > 0)
-        {
-            var fileName = $"discussions_{repoOwner}_{repoName}_output.json";
+            Console.WriteLine();
 
-            var outputPath = Path.Combine(outputDirectory, fileName);
+            if (discussions.Count > 0)
+            {
+                var fileName = $"discussions_{repoOwner}_{repoName}_output.json";
 
-            await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
-            await JsonSerializer.SerializeAsync(fileStream, discussions, ModelsJsonContext.Default.ListGithubDiscussionModel);
+                var outputPath = Path.Combine(outputDirectory, fileName);
 
-            Console.WriteLine($"Processed {discussions.Count} discussions.");
-            Console.WriteLine($"Discussions have been written to {fileName}.");
-        }
-        else if (includeDiscussions)
-        {
-            Console.WriteLine("No discussions found.");
-        }
-    }
+                await using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, useAsync: true);
+                await JsonSerializer.SerializeAsync(fileStream, discussions, ModelsJsonContext.Default.ListGithubDiscussionModel);
 
-
-    async Task<List<GithubIssueModel>> GetIssuesAsync(string[] labels, bool includeIssues)
-    {
-        if (!includeIssues)
-        {
-            return [];
+                Console.WriteLine($"Processed {discussions.Count} discussions.");
+                Console.WriteLine($"Discussions have been written to {fileName}.");
+            }
+            else if (includeDiscussions)
+            {
+                Console.WriteLine("No discussions found.");
+            }
         }
 
-        string? issuesCursor = null;
-        GraphqlResponse? graphqlResult = null;
 
-        var allIssues = new List<GithubIssueModel>();
-
-        do
+        async Task<List<GithubIssueModel>> GetIssuesAsync(string[] labels, bool includeIssues)
         {
-            var issuesQuery = @"
+            if (!includeIssues)
+            {
+                return [];
+            }
+
+            string? issuesCursor = null;
+            GraphqlResponse? graphqlResult = null;
+
+            var allIssues = new List<GithubIssueModel>();
+
+            do
+            {
+                var issuesQuery = @"
                     query($owner: String!, $name: String!, $after: String, $labels: [String!]) {
                         repository(owner: $owner, name: $name) {
                             issues(first: 100, after: $after, states: OPEN, labels: $labels) {
@@ -300,59 +305,59 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                         }
                     }";
 
-            var queryPayload = new GithubIssueQuery
-            {
-                Query = issuesQuery,
-                Variables = new() { Owner = repoOwner, Name = repoName, After = issuesCursor, Labels = labels is [] ? null : labels }
-            };
-
-            var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubIssueQuery);
-
-            if (!graphqlResponse.IsSuccessStatusCode)
-            {
-                if (graphqlResponse.StatusCode == HttpStatusCode.Forbidden)
+                var queryPayload = new GithubIssueQuery
                 {
-                    retryCount++;
-                    if (retryCount > maxRetries)
+                    Query = issuesQuery,
+                    Variables = new() { Owner = repoOwner, Name = repoName, After = issuesCursor, Labels = labels is [] ? null : labels }
+                };
+
+                var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubIssueQuery);
+
+                if (!graphqlResponse.IsSuccessStatusCode)
+                {
+                    if (graphqlResponse.StatusCode == HttpStatusCode.Forbidden)
                     {
-                        Console.WriteLine("Max retry attempts reached. Exiting.");
-                        break;
+                        retryCount++;
+                        if (retryCount > maxRetries)
+                        {
+                            Console.WriteLine("Max retry attempts reached. Exiting.");
+                            break;
+                        }
+
+                        var retryAfterHeader = graphqlResponse.Headers.RetryAfter;
+                        var retryAfterSeconds = retryAfterHeader?.Delta?.TotalSeconds ?? 60;
+
+                        Console.WriteLine($"Rate limited. Retrying in {retryAfterSeconds} seconds...");
+                        await Task.Delay(TimeSpan.FromSeconds(retryAfterSeconds));
+
+                        continue;
                     }
 
-                    var retryAfterHeader = graphqlResponse.Headers.RetryAfter;
-                    var retryAfterSeconds = retryAfterHeader?.Delta?.TotalSeconds ?? 60;
-
-                    Console.WriteLine($"Rate limited. Retrying in {retryAfterSeconds} seconds...");
-                    await Task.Delay(TimeSpan.FromSeconds(retryAfterSeconds));
-
-                    continue;
+                    var errorContent = await graphqlResponse.Content.ReadAsStringAsync();
+                    Console.WriteLine($"Error: {graphqlResponse.StatusCode}, Details: {errorContent}");
+                    break;
                 }
 
-                var errorContent = await graphqlResponse.Content.ReadAsStringAsync();
-                Console.WriteLine($"Error: {graphqlResponse.StatusCode}, Details: {errorContent}");
-                break;
-            }
+                graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
 
-            graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
-
-            foreach (var issueEdge in graphqlResult.Data.Repository!.Issues.Edges)
-            {
-                var issue = issueEdge.Node;
-
-                Console.WriteLine($"Processing issue {issue.Title} ({issue.Url})");
-
-                var issueJson = new GithubIssueModel
+                foreach (var issueEdge in graphqlResult.Data.Repository!.Issues.Edges)
                 {
-                    Id = issue.Id,
-                    Author = issue.Author?.Login ?? "??",
-                    Title = issue.Title,
-                    URL = issue.Url,
-                    CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
-                    LastUpdated = DateTime.Parse(issue.UpdatedAt).ToUniversalTime(),
-                    Body = issue.Body,
-                    Upvotes = issue.Reactions?.TotalCount ?? 0,
-                    Labels = issue.Labels.Nodes.Select(label => label.Name),
-                    Comments = [.. issue.Comments.Edges.Select(commentEdge => new GithubCommentModel
+                    var issue = issueEdge.Node;
+
+                    Console.WriteLine($"Processing issue {issue.Title} ({issue.Url})");
+
+                    var issueJson = new GithubIssueModel
+                    {
+                        Id = issue.Id,
+                        Author = issue.Author?.Login ?? "??",
+                        Title = issue.Title,
+                        URL = issue.Url,
+                        CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
+                        LastUpdated = DateTime.Parse(issue.UpdatedAt).ToUniversalTime(),
+                        Body = issue.Body,
+                        Upvotes = issue.Reactions?.TotalCount ?? 0,
+                        Labels = issue.Labels.Nodes.Select(label => label.Name),
+                        Comments = [.. issue.Comments.Edges.Select(commentEdge => new GithubCommentModel
                     {
                         Id = commentEdge.Node.Id,
                         Author = commentEdge.Node.Author?.Login ?? "??",
@@ -360,33 +365,33 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                         Content = commentEdge.Node.Body,
                         Url = commentEdge.Node.Url
                     })]
-                };
+                    };
 
-                allIssues.Add(issueJson);
-            }
+                    allIssues.Add(issueJson);
+                }
 
-            issuesCursor = graphqlResult.Data.Repository.Issues.PageInfo.EndCursor;
+                issuesCursor = graphqlResult.Data.Repository.Issues.PageInfo.EndCursor;
 
-        } while (graphqlResult!.Data.Repository!.Issues.PageInfo.HasNextPage);
+            } while (graphqlResult!.Data.Repository!.Issues.PageInfo.HasNextPage);
 
-        return allIssues;
-    }
-
-
-    async Task<List<GithubDiscussionModel>> GetDiscussionsAsync(bool includeDiscussions)
-    {
-        if (!includeDiscussions)
-        {
-            return [];
+            return allIssues;
         }
 
-        string? discussionsCursor = null;
-        GraphqlResponse? graphqlResult;
-        var allDiscussions = new List<GithubDiscussionModel>();
 
-        do
+        async Task<List<GithubDiscussionModel>> GetDiscussionsAsync(bool includeDiscussions)
         {
-            var discussionsQuery = @"
+            if (!includeDiscussions)
+            {
+                return [];
+            }
+
+            string? discussionsCursor = null;
+            GraphqlResponse? graphqlResult;
+            var allDiscussions = new List<GithubDiscussionModel>();
+
+            do
+            {
+                var discussionsQuery = @"
                     query($owner: String!, $name: String!, $after: String) {
                         repository(owner: $owner, name: $name) {
                             discussions(first: 100, after: $after) {
@@ -440,97 +445,97 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                         }
                     }";
 
-            var queryPayload = new GithubDiscussionQuery
-            {
-                Query = discussionsQuery,
-                Variables = new() { Owner = repoOwner, Name = repoName, After = discussionsCursor }
-            };
-
-            var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubDiscussionQuery);
-            graphqlResponse.EnsureSuccessStatusCode();
-
-            graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
-
-            foreach (var discussionEdge in graphqlResult.Data.Repository!.Discussions.Edges)
-            {
-                var discussion = discussionEdge.Node;
-
-                Console.WriteLine($"Processing discussion {discussion.Title} ({discussion.Url})");
-
-                var commentsList = new List<GithubCommentModel>();
-
-                // TODO: Walk through all pages of comments (properly)
-                //string? commentsCursor = null;
-
-                foreach (var commentEdge in discussion.Comments.Edges)
+                var queryPayload = new GithubDiscussionQuery
                 {
-                    var comment = commentEdge.Node;
-
-                    var commentJson = new GithubCommentModel
-                    {
-                        Id = comment.Id,
-                        Author = comment.Author?.Login ?? "??",
-                        Content = comment.Body,
-                        CreatedAt = comment.CreatedAt,
-                        Url = comment.Url
-                    };
-
-                    commentsList.Add(commentJson);
-
-                    if (comment.Replies is { } replies)
-                    {
-                        // Hoist replies as top-level comments
-                        foreach (var replyEdge in replies.Edges)
-                        {
-                            var reply = replyEdge.Node;
-                            var replyJson = new GithubCommentModel
-                            {
-                                Id = reply.Id,
-                                ParentId = comment.Id,
-                                Author = reply.Author?.Login ?? "??",
-                                Content = reply.Body,
-                                CreatedAt = reply.CreatedAt,
-                                Url = reply.Url
-                            };
-                            commentsList.Add(replyJson);
-                        }
-                    }
-                }
-
-                var discussionJson = new GithubDiscussionModel
-                {
-                    Title = discussion.Title,
-                    AnswerId = discussion.Answer?.Id,
-                    Url = discussion.Url,
-                    Comments = [.. commentsList]
+                    Query = discussionsQuery,
+                    Variables = new() { Owner = repoOwner, Name = repoName, After = discussionsCursor }
                 };
 
-                allDiscussions.Add(discussionJson);
-            }
+                var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubDiscussionQuery);
+                graphqlResponse.EnsureSuccessStatusCode();
 
-            discussionsCursor = graphqlResult.Data.Repository.Discussions.PageInfo.EndCursor;
+                graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
 
-        } while (graphqlResult.Data.Repository.Discussions.PageInfo.HasNextPage);
+                foreach (var discussionEdge in graphqlResult.Data.Repository!.Discussions.Edges)
+                {
+                    var discussion = discussionEdge.Node;
 
-        return allDiscussions;
-    }
+                    Console.WriteLine($"Processing discussion {discussion.Title} ({discussion.Url})");
 
+                    var commentsList = new List<GithubCommentModel>();
 
-    async Task<List<GithubIssueModel>> GetPullRequestsAsync(string[] labels, bool includePulls)
-    {
-        if (!includePulls)
-        {
-            return [];
+                    // TODO: Walk through all pages of comments (properly)
+                    //string? commentsCursor = null;
+
+                    foreach (var commentEdge in discussion.Comments.Edges)
+                    {
+                        var comment = commentEdge.Node;
+
+                        var commentJson = new GithubCommentModel
+                        {
+                            Id = comment.Id,
+                            Author = comment.Author?.Login ?? "??",
+                            Content = comment.Body,
+                            CreatedAt = comment.CreatedAt,
+                            Url = comment.Url
+                        };
+
+                        commentsList.Add(commentJson);
+
+                        if (comment.Replies is { } replies)
+                        {
+                            // Hoist replies as top-level comments
+                            foreach (var replyEdge in replies.Edges)
+                            {
+                                var reply = replyEdge.Node;
+                                var replyJson = new GithubCommentModel
+                                {
+                                    Id = reply.Id,
+                                    ParentId = comment.Id,
+                                    Author = reply.Author?.Login ?? "??",
+                                    Content = reply.Body,
+                                    CreatedAt = reply.CreatedAt,
+                                    Url = reply.Url
+                                };
+                                commentsList.Add(replyJson);
+                            }
+                        }
+                    }
+
+                    var discussionJson = new GithubDiscussionModel
+                    {
+                        Title = discussion.Title,
+                        AnswerId = discussion.Answer?.Id,
+                        Url = discussion.Url,
+                        Comments = [.. commentsList]
+                    };
+
+                    allDiscussions.Add(discussionJson);
+                }
+
+                discussionsCursor = graphqlResult.Data.Repository.Discussions.PageInfo.EndCursor;
+
+            } while (graphqlResult.Data.Repository.Discussions.PageInfo.HasNextPage);
+
+            return allDiscussions;
         }
 
-        string? issuesCursor = null;
-        GraphqlResponse? graphqlResult = null;
 
-        var allIssues = new List<GithubIssueModel>();
-
-        do
+        async Task<List<GithubIssueModel>> GetPullRequestsAsync(string[] labels, bool includePulls)
         {
-            var issuesQuery = @"
+            if (!includePulls)
+            {
+                return [];
+            }
+
+            string? issuesCursor = null;
+            GraphqlResponse? graphqlResult = null;
+
+            var allIssues = new List<GithubIssueModel>();
+
+            do
+            {
+                var issuesQuery = @"
                     query($owner: String!, $name: String!, $after: String, $labels: [String!]) {
                         repository(owner: $owner, name: $name) {
                             pullRequests(first: 100, after: $after, states: OPEN, labels: $labels) {
@@ -580,59 +585,59 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                         }
                     }";
 
-            var queryPayload = new GithubIssueQuery
-            {
-                Query = issuesQuery,
-                Variables = new() { Owner = repoOwner, Name = repoName, After = issuesCursor, Labels = labels is [] ? null : labels }
-            };
-
-            var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubIssueQuery);
-
-            if (!graphqlResponse.IsSuccessStatusCode)
-            {
-                if (graphqlResponse.StatusCode == HttpStatusCode.Forbidden)
+                var queryPayload = new GithubIssueQuery
                 {
-                    retryCount++;
-                    if (retryCount > maxRetries)
+                    Query = issuesQuery,
+                    Variables = new() { Owner = repoOwner, Name = repoName, After = issuesCursor, Labels = labels is [] ? null : labels }
+                };
+
+                var graphqlResponse = await httpClient.PostAsJsonAsync("https://api.github.com/graphql", queryPayload, ModelsJsonContext.Default.GithubIssueQuery);
+
+                if (!graphqlResponse.IsSuccessStatusCode)
+                {
+                    if (graphqlResponse.StatusCode == HttpStatusCode.Forbidden)
                     {
-                        Console.WriteLine("Max retry attempts reached. Exiting.");
-                        break;
+                        retryCount++;
+                        if (retryCount > maxRetries)
+                        {
+                            Console.WriteLine("Max retry attempts reached. Exiting.");
+                            break;
+                        }
+
+                        var retryAfterHeader = graphqlResponse.Headers.RetryAfter;
+                        var retryAfterSeconds = retryAfterHeader?.Delta?.TotalSeconds ?? 60;
+
+                        Console.WriteLine($"Rate limited. Retrying in {retryAfterSeconds} seconds...");
+                        await Task.Delay(TimeSpan.FromSeconds(retryAfterSeconds));
+
+                        continue;
                     }
 
-                    var retryAfterHeader = graphqlResponse.Headers.RetryAfter;
-                    var retryAfterSeconds = retryAfterHeader?.Delta?.TotalSeconds ?? 60;
-
-                    Console.WriteLine($"Rate limited. Retrying in {retryAfterSeconds} seconds...");
-                    await Task.Delay(TimeSpan.FromSeconds(retryAfterSeconds));
-
-                    continue;
+                    var errorContent = await graphqlResponse.Content.ReadAsStringAsync();
+                    Console.WriteLine($"Error: {graphqlResponse.StatusCode}, Details: {errorContent}");
+                    break;
                 }
 
-                var errorContent = await graphqlResponse.Content.ReadAsStringAsync();
-                Console.WriteLine($"Error: {graphqlResponse.StatusCode}, Details: {errorContent}");
-                break;
-            }
+                graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
 
-            graphqlResult = (await graphqlResponse.Content.ReadFromJsonAsync(ModelsJsonContext.Default.GraphqlResponse))!;
-
-            foreach (var issueEdge in graphqlResult.Data.Repository!.PullRequests.Edges)
-            {
-                var issue = issueEdge.Node;
-
-                Console.WriteLine($"Processing pull-request {issue.Title} ({issue.Url})");
-
-                var issueJson = new GithubIssueModel
+                foreach (var issueEdge in graphqlResult.Data.Repository!.PullRequests.Edges)
                 {
-                    Id = issue.Id,
-                    Author = issue.Author?.Login ?? "??",
-                    Title = issue.Title,
-                    URL = issue.Url,
-                    CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
-                    LastUpdated = DateTime.Parse(issue.UpdatedAt).ToUniversalTime(),
-                    Body = issue.Body,
-                    Upvotes = issue.Reactions?.TotalCount ?? 0,
-                    Labels = issue.Labels.Nodes.Select(label => label.Name),
-                    Comments = [.. issue.Comments.Edges.Select(commentEdge => new GithubCommentModel
+                    var issue = issueEdge.Node;
+
+                    Console.WriteLine($"Processing pull-request {issue.Title} ({issue.Url})");
+
+                    var issueJson = new GithubIssueModel
+                    {
+                        Id = issue.Id,
+                        Author = issue.Author?.Login ?? "??",
+                        Title = issue.Title,
+                        URL = issue.Url,
+                        CreatedAt = DateTime.Parse(issue.CreatedAt).ToUniversalTime(),
+                        LastUpdated = DateTime.Parse(issue.UpdatedAt).ToUniversalTime(),
+                        Body = issue.Body,
+                        Upvotes = issue.Reactions?.TotalCount ?? 0,
+                        Labels = issue.Labels.Nodes.Select(label => label.Name),
+                        Comments = [.. issue.Comments.Edges.Select(commentEdge => new GithubCommentModel
                     {
                         Id = commentEdge.Node.Id,
                         Author = commentEdge.Node.Author?.Login ?? "??",
@@ -640,15 +645,21 @@ async Task RunAsync(string? accessToken, string? repo, string[] labels, bool? in
                         Content = commentEdge.Node.Body,
                         Url = commentEdge.Node.Url
                     })]
-                };
+                    };
 
-                allIssues.Add(issueJson);
-            }
+                    allIssues.Add(issueJson);
+                }
 
-            issuesCursor = graphqlResult.Data.Repository.PullRequests.PageInfo.EndCursor;
+                issuesCursor = graphqlResult.Data.Repository.PullRequests.PageInfo.EndCursor;
 
-        } while (graphqlResult!.Data.Repository!.PullRequests.PageInfo.HasNextPage);
+            } while (graphqlResult!.Data.Repository!.PullRequests.PageInfo.HasNextPage);
 
-        return allIssues;
+            return allIssues;
+        }
+    }
+    catch
+    {
+        Console.Error.WriteLine("The operation failed");
+        return -1;
     }
 }
